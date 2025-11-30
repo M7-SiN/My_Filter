@@ -13,17 +13,12 @@ API_KEY_MAP = {
 }
 API_KEY_MAP = {k: v for k, v in API_KEY_MAP.items() if k}
 
-# 1. Languages to KEEP (Filter Logic)
+# Filter Settings
 TARGET_LANGUAGES = ["ar", "ara", "arabic", "ar-sa", "sa", "ksa"]
-
-# 2. Attributes to READ to find those languages
 CHECK_ATTRS = ["subs", "subs ", "subtitles", "language"]
-
-# 3. Attributes to DELETE from the final output (Cleanup)
-# We remove these so the result looks like a "Regular" search to Stremio
 HIDE_ATTRS = ["subs", "subs ", "subtitles"]
 
-# --- NAMESPACE FIX ---
+# Register namespace to help, but we will double-check with string replacement later
 try:
     ET.register_namespace('newznab', 'http://www.newznab.com/DTD/2010/feeds/attributes/')
     ET.register_namespace('atom', 'http://www.w3.org/2005/Atom')
@@ -44,7 +39,6 @@ def catch_all(path):
     if not real_base_url:
         return Response("Error: API Key not recognized.", status=401)
 
-    # Bypass Caps
     if params.get('t') == 'caps':
         try:
             r = requests.get(f"{real_base_url}/api", params=params)
@@ -52,7 +46,7 @@ def catch_all(path):
         except:
             return Response("Indexer Down", status=502)
 
-    # We MUST force extended=1 to perform the check
+    # Force Extended
     params['extended'] = '1'
     
     try:
@@ -75,40 +69,46 @@ def catch_all(path):
                     name = child.get('name', '').lower()
                     val = child.get('value', '').lower()
 
-                    # 1. Mark for deletion if it's a subtitle tag
-                    # We do this so Stremio doesn't see the messy subtitle list
+                    # Mark for deletion
                     if name in HIDE_ATTRS:
                         tags_to_delete.append(child)
 
-                    # 2. Filter Logic (Check if it contains Arabic)
+                    # Check Language
                     if name in CHECK_ATTRS:
                         clean_val = val.replace(',', ' ').replace(';', ' ')
                         words = clean_val.split()
-                        
                         if any(t in words for t in TARGET_LANGUAGES):
                             keep_item = True
-                        
-                        # Loose Match
                         for t in TARGET_LANGUAGES:
                             if t in val and (len(t) > 2 or f"{t}-" in val):
                                 keep_item = True
 
-            # DECISION TIME
             if not keep_item:
-                # No Arabic found? Delete the whole item.
                 channel.remove(item)
             else:
-                # Arabic found? Keep item, but remove the subtitle tags to clean up the view.
-                # 'audiolanguage' and 'size' are NOT in HIDE_ATTRS, so they stay.
                 for tag in tags_to_delete:
                     try:
                         item.remove(tag)
                     except:
                         pass
-                
-        return Response(ET.tostring(root, encoding='utf-8'), mimetype='application/rss+xml')
+
+        # Generate the XML string
+        xml_str = ET.tostring(root, encoding='utf-8').decode('utf-8')
+
+        # --- FINAL SAFETY PATCH ---
+        # Python sometimes ignores register_namespace and uses 'ns0:attr'.
+        # We manually force it back to 'newznab:attr' so Stremio recognizes the size.
+        xml_str = xml_str.replace('ns0:attr', 'newznab:attr')
+        xml_str = xml_str.replace('ns0:response', 'newznab:response')
+        
+        # Ensure the namespace definition exists in the header if it was lost
+        if 'xmlns:newznab' not in xml_str:
+            xml_str = xml_str.replace('<rss', '<rss xmlns:newznab="http://www.newznab.com/DTD/2010/feeds/attributes/"')
+
+        return Response(xml_str.encode('utf-8'), mimetype='application/rss+xml')
 
     except Exception as e:
+        # Fallback: return original content if parsing broke
         return Response(r.content, status=r.status_code)
 
 if __name__ == '__main__':
