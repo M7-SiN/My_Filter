@@ -14,7 +14,17 @@ API_KEY_MAP = {k: v for k, v in API_KEY_MAP.items() if k}
 
 TARGET_LANGUAGES = ["ar", "ara", "arabic", "ar-sa", "sa",]
 TARGET_ATTR_NAMES = ["subs", "subs ", "subtitles", "language"]
+# --- NEW HEALTH CHECK ROUTE ---
+# This must go BEFORE the catch_all route so it doesn't get blocked
+@app.route('/health')
+def health_check():
+    return "Alive", 200
 
+# --- EXISTING CATCH-ALL ROUTE ---
+@app.route('/', defaults={'path': ''})
+@app.route('/<path:path>')
+def catch_all(path):
+    # ... (rest of your existing code)
 @app.route('/', defaults={'path': ''})
 @app.route('/<path:path>')
 def catch_all(path):
