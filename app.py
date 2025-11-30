@@ -7,24 +7,22 @@ app = Flask(__name__)
 
 # --- CONFIGURATION ---
 API_KEY_MAP = {
-    os.environ.get("GEEK_API_KEY"): "https://api.nzbgeek.info"
+    os.environ.get("GEEK_API_KEY"): "https://api.nzbgeek.info",
+    os.environ.get("SLUG_API_KEY"): "https://api.drunkenslug.com",
+    os.environ.get("PLANET_API_KEY"): "https://api.nzbplanet.net"
 }
 # Clean up empty keys
 API_KEY_MAP = {k: v for k, v in API_KEY_MAP.items() if k}
 
-TARGET_LANGUAGES = ["ar", "ara", "arabic", "ar-sa", "sa",]
-TARGET_ATTR_NAMES = ["subs", "subs ", "subtitles", "language"]
+TARGET_LANGUAGES = ["ar", "ara", "arabic", "ar-sa", "sa", "ksa"]
+TARGET_ATTR_NAMES = ["subs", "subs ", "subtitles", "language", "audiolanguage"]
+
 # --- NEW HEALTH CHECK ROUTE ---
-# This must go BEFORE the catch_all route so it doesn't get blocked
 @app.route('/health')
 def health_check():
-    return "Alive", 200
+    return "Alive", 200  # <--- THIS INDENTATION WAS MISSING
 
-# --- EXISTING CATCH-ALL ROUTE ---
-@app.route('/', defaults={'path': ''})
-@app.route('/<path:path>')
-def catch_all(path):
-    # ... (rest of your existing code)
+# --- MAIN CATCH-ALL ROUTE ---
 @app.route('/', defaults={'path': ''})
 @app.route('/<path:path>')
 def catch_all(path):
@@ -88,5 +86,4 @@ def catch_all(path):
         return Response(r.content, status=r.status_code)
 
 if __name__ == '__main__':
-    # This allows you to run it locally with 'python app.py' if needed
     app.run(host='0.0.0.0', port=8000)
