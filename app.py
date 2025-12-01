@@ -1,6 +1,6 @@
 from flask import Flask, request, Response
 import requests
-import xml.etree.ElementTree as ET
+import re
 import os
 
 app = Flask(__name__)
@@ -13,17 +13,7 @@ API_KEY_MAP = {
 }
 API_KEY_MAP = {k: v for k, v in API_KEY_MAP.items() if k}
 
-# Filter Settings
 TARGET_LANGUAGES = ["ar", "ara", "arabic", "ar-sa", "sa", "ksa"]
-CHECK_ATTRS = ["subs", "subs ", "subtitles", "language"]
-HIDE_ATTRS = ["subs", "subs ", "subtitles"]
-
-# Register namespace to help, but we will double-check with string replacement later
-try:
-    ET.register_namespace('newznab', 'http://www.newznab.com/DTD/2010/feeds/attributes/')
-    ET.register_namespace('atom', 'http://www.w3.org/2005/Atom')
-except:
-    pass
 
 @app.route('/health')
 def health_check():
@@ -39,6 +29,7 @@ def catch_all(path):
     if not real_base_url:
         return Response("Error: API Key not recognized.", status=401)
 
+    # Bypass Caps Check (Pass through raw)
     if params.get('t') == 'caps':
         try:
             r = requests.get(f"{real_base_url}/api", params=params)
@@ -55,63 +46,121 @@ def catch_all(path):
     except Exception as e:
         return Response(str(e), status=502)
 
-    try:
-        root = ET.fromstring(r.content)
-        channel = root.find('channel')
-        items = channel.findall('item') if channel is not None else []
+    # --- REGEX FILTERING (The "Better Way") ---
+    content = r.text
+    
+    # 1. Split the XML into Header, Items, and Footer
+    # We find where the first <item> starts and where the channel ends
+    start_marker = '<item>'
+    end_marker = '</channel>'
+    
+    if start_marker not in content:
+        # No results found by indexer, return as is
+        return Response(content, mimetype='application/rss+xml')
+
+    # Split into: [Header, Item1, Item2, ... Footer]
+    # This allows us to manipulate items without breaking the RSS header definitions
+    parts = re.split(r'(<item>)', content)
+    
+    header = parts[0] # Everything before the first item
+    filtered_items = []
+    
+    # We iterate starting from index 1 because 0 is the header
+    # parts[i] is "<item>", parts[i+1] is the content of the item
+    for i in range(1, len(parts), 2):
+        item_tag = parts[i]      # This is just string "<item>"
+        item_body = parts[i+1]   # This is the rest of the item up to next split
         
-        for item in items:
-            keep_item = False
-            tags_to_delete = [] 
-
-            for child in item:
-                if child.tag.endswith('attr'):
-                    name = child.get('name', '').lower()
-                    val = child.get('value', '').lower()
-
-                    # Mark for deletion
-                    if name in HIDE_ATTRS:
-                        tags_to_delete.append(child)
-
-                    # Check Language
-                    if name in CHECK_ATTRS:
-                        clean_val = val.replace(',', ' ').replace(';', ' ')
-                        words = clean_val.split()
-                        if any(t in words for t in TARGET_LANGUAGES):
-                            keep_item = True
-                        for t in TARGET_LANGUAGES:
-                            if t in val and (len(t) > 2 or f"{t}-" in val):
-                                keep_item = True
-
-            if not keep_item:
-                channel.remove(item)
+        full_item_string = item_tag + item_body
+        
+        # 2. Find the "subs" attribute using Regex
+        # Looks for: <newznab:attr name="subs" value="English, Arabic" ... />
+        # Capture group 2 contains the value
+        subs_match = re.search(r'name=["\'](subs|subtitles)["\'].*?value=["\'](.*?)["\']', full_item_string, re.IGNORECASE)
+        
+        keep_item = False
+        
+        if subs_match:
+            subs_value = subs_match.group(2).lower()
+            
+            # Logic: Check if Arabic is in the value
+            clean_val = subs_value.replace(',', ' ').replace(';', ' ')
+            words = clean_val.split()
+            
+            if any(t in words for t in TARGET_LANGUAGES):
+                keep_item = True
             else:
-                for tag in tags_to_delete:
-                    try:
-                        item.remove(tag)
-                    except:
-                        pass
+                # Fallback for things like "ar-sa" inside the string
+                for t in TARGET_LANGUAGES:
+                    if t in subs_value and (len(t) > 2 or f"{t}-" in subs_value):
+                        keep_item = True
+                        break
 
-        # Generate the XML string
-        xml_str = ET.tostring(root, encoding='utf-8').decode('utf-8')
+            # 3. Cleanup: If keeping, remove the subs line so Stremio UI is clean
+            if keep_item:
+                # Remove the entire line containing name="subs"
+                # This regex finds the specific <attr> tag for subs and replaces with empty string
+                full_item_string = re.sub(r'<[^>]*name=["\'](subs|subtitles)["\'][^>]*>', '', full_item_string, flags=re.IGNORECASE)
+                filtered_items.append(full_item_string)
 
-        # --- FINAL SAFETY PATCH ---
-        # Python sometimes ignores register_namespace and uses 'ns0:attr'.
-        # We manually force it back to 'newznab:attr' so Stremio recognizes the size.
-        xml_str = xml_str.replace('ns0:attr', 'newznab:attr')
-        xml_str = xml_str.replace('ns0:response', 'newznab:response')
+    # 4. Rebuild the XML
+    # If the last item split included the footer (</channel>...), we need to be careful not to duplicate or lose it.
+    # The regex split usually leaves the footer attached to the last item body or as a separate part.
+    # Simpler approach: Join valid items, then attach footer.
+    
+    # Ideally, we reconstruct exactly what we split.
+    # But simple split might leave footer in the last element.
+    
+    # Safer Rebuild Strategy:
+    # Check if footer exists in the last filtered item (if we kept the last one). 
+    # If we deleted the last item from the original list, we lost the footer.
+    # We must extract the footer from the original content first.
+    
+    footer_index = content.rfind('</channel>')
+    if footer_index != -1:
+        footer = content[footer_index:]
+        # Strip footer from the last item processed in the loop to avoid duplication
+        # (The regex split approach makes this tricky, let's refine the loop logic above)
+    
+    # --- REFINED REBUILD LOGIC ---
+    # Let's use a safer split pattern that separates items cleanly
+    item_blocks = re.findall(r'(<item>.*?</item>)', content, re.DOTALL)
+    
+    final_items = []
+    for block in item_blocks:
+        # Check for subs
+        subs_match = re.search(r'name=["\'](subs|subtitles)["\'].*?value=["\'](.*?)["\']', block, re.IGNORECASE)
         
-        # Ensure the namespace definition exists in the header if it was lost
-        if 'xmlns:newznab' not in xml_str:
-            xml_str = xml_str.replace('<rss', '<rss xmlns:newznab="http://www.newznab.com/DTD/2010/feeds/attributes/"')
+        if subs_match:
+            val = subs_match.group(2).lower()
+            clean_val = val.replace(',', ' ').replace(';', ' ')
+            words = clean_val.split()
+            
+            is_arabic = any(t in words for t in TARGET_LANGUAGES)
+            if not is_arabic:
+                 for t in TARGET_LANGUAGES:
+                    if t in val and (len(t) > 2 or f"{t}-" in val):
+                        is_arabic = True
+                        break
+            
+            if is_arabic:
+                # Remove the subs tag for clean UI
+                clean_block = re.sub(r'<[^>]*name=["\'](subs|subtitles)["\'][^>]*>', '', block, flags=re.IGNORECASE)
+                final_items.append(clean_block)
 
-        return Response(xml_str.encode('utf-8'), mimetype='application/rss+xml')
-
-    except Exception as e:
-        # Fallback: return original content if parsing broke
-        return Response(r.content, status=r.status_code)
+    # Reconstruct: Header + All Kept Items + Footer
+    # We locate the first <item> to find where header ends
+    first_item_pos = content.find('<item>')
+    last_item_end_pos = content.rfind('</item>') + 7
+    
+    if first_item_pos != -1:
+        real_header = content[:first_item_pos]
+        real_footer = content[last_item_end_pos:]
+        final_xml = real_header + "".join(final_items) + real_footer
+        return Response(final_xml, mimetype='application/rss+xml')
+    else:
+        # If structure is weird, return original
+        return Response(content, mimetype='application/rss+xml')
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=8000)
-
-
