@@ -46,36 +46,17 @@ def catch_all(path):
     except Exception as e:
         return Response(str(e), status=502)
 
-    # 2. Split the XML into Header and Items
-    # We assume the first <item> marks the start of the content
-    first_item_index = raw_xml.find('<item>')
-    
-    if first_item_index == -1:
-        # No items found, return raw response (likely empty results or error)
-        return Response(raw_xml, mimetype='application/rss+xml')
+    # --- ROBUST REGEX FILTERING ---
+    # Instead of splitting the string manually (which breaks tags),
+    # we use re.sub with a callback function to process items in-place.
 
-    # Separate the Header (RSS definitions) from the Body
-    header = raw_xml[:first_item_index]
-    body = raw_xml[first_item_index:]
-
-    # 3. Extract all <item>...</item> blocks using Regex
-    # re.DOTALL makes the dot (.) match newlines
-    items = re.findall(r'(<item>.*?</item>)', body, re.DOTALL)
-    
-    # We also need to capture the footer (</channel></rss>)
-    # It's whatever is left after the last item
-    last_item_end = body.rfind('</item>') + 7
-    footer = body[last_item_end:]
-
-    filtered_items = []
-
-    for item_xml in items:
-        keep_item = False
+    def process_item(match):
+        item_xml = match.group(0)
         
-        # 4. Check for Arabic in the "subs" attribute
-        # We look for: name="subs" ... value="...Arabic..."
+        # Check for Arabic in the "subs" attribute
         subs_match = re.search(r'name=["\'](subs|subtitles)["\'].*?value=["\'](.*?)["\']', item_xml, re.IGNORECASE)
         
+        keep_item = False
         if subs_match:
             val = subs_match.group(2).lower()
             clean_val = val.replace(',', ' ').replace(';', ' ')
@@ -88,16 +69,20 @@ def catch_all(path):
                     if t in val and (len(t) > 2 or f"{t}-" in val):
                         keep_item = True
                         break
-
-        # 5. If we keep it, scrub the subtitle line to match "Standard" output
+        
         if keep_item:
-            # This regex removes the entire <newznab:attr name="subs" ... /> line
-            # It leaves the size and enclosure tags 100% untouched.
-            clean_xml = re.sub(r'<.*?name=["\'](subs|subtitles)["\'].*?/>', '', item_xml, flags=re.IGNORECASE)
-            filtered_items.append(clean_xml)
+            # Item is Good: Remove the 'subs' tag to fix Stremio UI, but keep everything else
+            clean_xml = re.sub(r'<[^>]*name=["\'](subs|subtitles)["\'][^>]*>', '', item_xml, flags=re.IGNORECASE)
+            # Optional: Remove empty lines left behind
+            clean_xml = re.sub(r'\n\s*\n', '\n', clean_xml)
+            return clean_xml
+        else:
+            # Item is Bad: Return empty string to delete it from the file
+            return ""
 
-    # 6. Rebuild the final XML string
-    final_output = header + "".join(filtered_items) + footer
+    # Apply the processor to every <item> block
+    # re.DOTALL ensures '.' matches newlines so we capture the full item
+    final_output = re.sub(r'<item>.*?</item>', process_item, raw_xml, flags=re.DOTALL)
 
     return Response(final_output, mimetype='application/rss+xml')
 
