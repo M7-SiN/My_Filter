@@ -2,22 +2,24 @@ from flask import Flask, request, Response
 import requests, re, os, html
 from urllib.parse import quote, unquote
 
-_A = Flask(__name__)
+app = Flask(__name__)
 
 def _k(n):
     v = os.environ.get(n)
     return v.strip() if v else None
 
 _M = {
-    _k("GEEK_API_KEY"): "https://api.nzbgeek.info"
+    _k("GEEK_API_KEY"): "https://api.nzbgeek.info",
+    _k("SLUG_API_KEY"): "https://api.drunkenslug.com",
+    _k("PLANET_API_KEY"): "https://api.nzbplanet.net"
 }
 _M = {k: v for k, v in _M.items() if k}
 _L = ["ar", "ara", "arabic", "ar-sa", "sa", "ksa"]
 
-@_A.route('/health')
+@app.route('/health')
 def _h(): return "Alive", 200
 
-@_A.route('/dl')
+@app.route('/dl')
 def _d():
     _s = request.args.get('source'); _l = request.args.get('log')
     if not _s: return Response("", 400)
@@ -40,8 +42,8 @@ def _d():
         return Response(_c, _r.status_code, _hd)
     except Exception as e: return Response(str(e), 502)
 
-@_A.route('/', defaults={'path': ''})
-@_A.route('/<path:path>')
+@app.route('/', defaults={'path': ''})
+@app.route('/<path:path>')
 def _c(path):
     _by = False
     if path.startswith('global/'): path = path.replace('global/', '', 1); _by = True
@@ -75,5 +77,4 @@ def _c(path):
         return ""
     return Response(re.sub(r'<item>.*?</item>', _sub, _tx, flags=re.DOTALL), mimetype='application/rss+xml')
 
-if __name__ == '__main__': _A.run(host='0.0.0.0', port=8000)
-
+if __name__ == '__main__': app.run(host='0.0.0.0', port=8000)
