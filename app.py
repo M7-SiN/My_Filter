@@ -72,7 +72,8 @@ def _c(path):
         if _k:
             _cl = re.sub(r'<[^>]*name=["\'](subs|subtitles)["\'][^>]*>', '', _xml, flags=re.IGNORECASE)
             _cl = re.sub(r'\n\s*\n', '\n', _cl); _lg = '0' if _by else '1'
-            def _rl(x): return f'url="{_root}dl?source={quote(html.unescape(x.group(1)))}&log={_lg}"'
+            # FIX: use &amp; instead of & for XML compatibility
+            def _rl(x): return f'url="{_root}dl?source={quote(html.unescape(x.group(1)))}&amp;log={_lg}"'
             return re.sub(r'url="([^"]+)"', _rl, _cl)
         return ""
     return Response(re.sub(r'<item>.*?</item>', _sub, _tx, flags=re.DOTALL), mimetype='application/rss+xml')
