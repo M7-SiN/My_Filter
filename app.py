@@ -9,9 +9,7 @@ def _k(n):
     return v.strip() if v else None
 
 _M = {
-    _k("GEEK_API_KEY"): "https://api.nzbgeek.info",
-    _k("SLUG_API_KEY"): "https://api.drunkenslug.com",
-    _k("PLANET_API_KEY"): "https://api.nzbplanet.net"
+    _k("GEEK_API_KEY"): "https://api.nzbgeek.info"
 }
 _M = {k: v for k, v in _M.items() if k}
 _L = ["ar", "ara", "arabic", "ar-sa", "sa", "ksa"]
@@ -78,3 +76,4 @@ def _c(path):
     return Response(re.sub(r'<item>.*?</item>', _sub, _tx, flags=re.DOTALL), mimetype='application/rss+xml')
 
 if __name__ == '__main__': _A.run(host='0.0.0.0', port=8000)
+
