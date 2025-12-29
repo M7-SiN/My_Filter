@@ -1,5 +1,5 @@
 from flask import Flask, request, Response
-import requests, re, os, html
+import requests, re, os, html, time
 from urllib.parse import quote, unquote
 
 app = Flask(__name__)
@@ -15,6 +15,7 @@ _M = {
 }
 _M = {k: v for k, v in _M.items() if k}
 _L = ["ar", "ara", "arabic", "ar-sa", "sa", "ksa"]
+_CACHE = {}
 
 @app.route('/health')
 def _h(): return "Alive", 200
@@ -25,18 +26,37 @@ def _d():
     if not _s: return Response("", 400)
     _u = html.unescape(unquote(_s))
     try:
+        # 1. Fetch file to get headers
         _r = requests.get(_u, stream=True, headers={'User-Agent': 'Mozilla/5.0'})
         _r.raise_for_status(); _c = _r.content
+        
+        # 2. Extract Filename
+        _f = "video.nzb"
+        if "Content-Disposition" in _r.headers:
+            _h = _r.headers["Content-Disposition"]
+            _m = re.search(r'filename=["\']?([^"\';]+)["\']?', _h)
+            if _m: _f = _m.group(1)
+
+        # 3. Check Cache (30 Days = 2592000 seconds)
         _w = os.environ.get("DISCORD_WEBHOOK")
-        if _w and _l == '1':
+        _now = time.time()
+        _skip = False
+
+        if _f in _CACHE:
+            if _now - _CACHE[_f] < 2592000: _skip = True
+        
+        # Update cache
+        _CACHE[_f] = _now 
+        # Clean old entries > 31 days
+        for k in list(_CACHE):
+            if _now - _CACHE[k] > 2678400: del _CACHE[k]
+
+        # 4. Log to Discord (Only if allowed & not cached)
+        if _w and _l == '1' and not _skip:
             try:
-                _f = "video.nzb"
-                if "Content-Disposition" in _r.headers:
-                    _h = _r.headers["Content-Disposition"]
-                    _m = re.search(r'filename=["\']?([^"\';]+)["\']?', _h)
-                    if _m: _f = _m.group(1)
                 requests.post(_w, data={"content": f"**New:** `{_f}`"}, files={"file": (_f, _c)})
             except: pass
+            
         _x = ['content-encoding', 'content-length', 'transfer-encoding', 'connection']
         _hd = [(n, v) for (n, v) in _r.raw.headers.items() if n.lower() not in _x]
         return Response(_c, _r.status_code, _hd)
@@ -72,7 +92,6 @@ def _c(path):
         if _k:
             _cl = re.sub(r'<[^>]*name=["\'](subs|subtitles)["\'][^>]*>', '', _xml, flags=re.IGNORECASE)
             _cl = re.sub(r'\n\s*\n', '\n', _cl); _lg = '0' if _by else '1'
-            # FIX: use &amp; instead of & for XML compatibility
             def _rl(x): return f'url="{_root}dl?source={quote(html.unescape(x.group(1)))}&amp;log={_lg}"'
             return re.sub(r'url="([^"]+)"', _rl, _cl)
         return ""
